@@ -18,11 +18,24 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+/**
+ * Prints the worked example from the README: three engagements on audit-ifrs,
+ * two publishes before anyone decides, then an apply, a decline, and one more
+ * publish. Run it with {@code mvn -q exec:java}.
+ */
 public final class DemoApp {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final TemplateId TEMPLATE = new TemplateId("audit-ifrs");
     private static final FirmId FIRM = new FirmId("firm-north");
 
+    /**
+     * Loads template documents v1 through v4, creates Alpha, Beta, and Gamma on
+     * v1, then walks the publishes and decisions. After each step it prints the
+     * firm glance list, and at the points that matter it also prints one
+     * engagement's summary lines and hops. The last line is how many JSON diffs
+     * ran, which stays small because engagements that share an applied version
+     * share a cached summary.
+     */
     public static void main(String[] args) {
         InMemoryTemplateDiffer differ = new InMemoryTemplateDiffer();
         differ.put(TEMPLATE, 1, v1());
@@ -63,6 +76,11 @@ public final class DemoApp {
                 + " (shared across engagements via per-version-pair cache)");
     }
 
+    /**
+     * Prints one glance row per engagement in the demo firm: whether it is
+     * pending or current, the applied version, the latest version, and the
+     * headline when a pending update exists.
+     */
     private static void printGlance(String title, PendingUpdateService service) {
         System.out.println();
         System.out.println("=== " + title + " ===");
@@ -76,6 +94,12 @@ public final class DemoApp {
         }
     }
 
+    /**
+     * Prints the accumulated headline, each summary line, and the hop headlines
+     * for one engagement. When the engagement has nothing pending, prints that
+     * instead of an empty summary. Hops are printed only when more than one
+     * publish sits between the applied version and the latest.
+     */
     private static void printDetail(PendingUpdateService service, String engagement) {
         EngagementId id = new EngagementId(engagement);
         PendingUpdate pending = service.getPending(id).orElse(null);
@@ -97,6 +121,10 @@ public final class DemoApp {
         }
     }
 
+    /**
+     * Template v1: one cash-confirmation procedure and a year-end checklist.
+     * Creating an engagement on this version leaves nothing pending.
+     */
     private static JsonNode v1() {
         ObjectNode root = JSON.createObjectNode();
         root.set("procedures", array(procedure("P-100", "Confirm cash balances", true, null)));
@@ -104,6 +132,10 @@ public final class DemoApp {
         return root;
     }
 
+    /**
+     * Template v2: v1 plus the going-concern procedure P-210. Publishing this
+     * version is what first marks the three engagements pending.
+     */
     private static JsonNode v2() {
         ObjectNode root = JSON.createObjectNode();
         root.set("procedures", array(
@@ -114,6 +146,10 @@ public final class DemoApp {
         return root;
     }
 
+    /**
+     * Template v3: v2, plus guidance on the cash procedure and a related-party
+     * disclosure. A user who has not decided yet sees v1 through v3 as one span.
+     */
     private static JsonNode v3() {
         ObjectNode root = JSON.createObjectNode();
         root.set("procedures", array(
@@ -125,6 +161,11 @@ public final class DemoApp {
         return root;
     }
 
+    /**
+     * Template v4: v3 plus an optional subsequent-events procedure. After Alpha
+     * has applied v3, Alpha's pending span is only v3 to v4. Beta and Gamma
+     * still see the jump from v1.
+     */
     private static JsonNode v4() {
         ObjectNode root = (ObjectNode) v3();
         ArrayNode procedures = (ArrayNode) root.get("procedures");
@@ -132,6 +173,10 @@ public final class DemoApp {
         return root;
     }
 
+    /**
+     * Wraps the given objects in a JSON array, preserving the order they were
+     * passed. Procedure and checklist sections are arrays of these objects.
+     */
     private static ArrayNode array(ObjectNode... nodes) {
         ArrayNode array = JSON.createArrayNode();
         for (ObjectNode node : nodes) {
@@ -140,6 +185,10 @@ public final class DemoApp {
         return array;
     }
 
+    /**
+     * Builds a checklist or disclosure object with an id and a title. The id is
+     * what lets the differ match the same item across versions.
+     */
     private static ObjectNode item(String id, String title) {
         ObjectNode node = JSON.createObjectNode();
         node.put("id", id);
@@ -147,6 +196,11 @@ public final class DemoApp {
         return node;
     }
 
+    /**
+     * Builds a procedure object. {@code required} is always written. Guidance
+     * is omitted when null, so adding it in a later version shows up as a new
+     * field rather than a change from an empty string.
+     */
     private static ObjectNode procedure(String id, String title, boolean required, String guidance) {
         ObjectNode node = item(id, title);
         node.put("required", required);

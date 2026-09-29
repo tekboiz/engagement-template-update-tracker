@@ -46,6 +46,12 @@ public final class PendingUpdateService {
     private final PendingUpdateStore pending;
     private final SummaryCache cache;
 
+    /**
+     * Wires the six collaborators this service needs. None of them may be null:
+     * the registry and catalog are the two indexes, the differ and summarizer
+     * turn template JSON into sentences, and the pending store plus summary
+     * cache hold the results so later queries do not recompute them.
+     */
     public PendingUpdateService(
             EngagementTemplateRegistry registry,
             TemplateCatalog catalog,
@@ -62,6 +68,13 @@ public final class PendingUpdateService {
         this.cache = Objects.requireNonNull(cache);
     }
 
+    /**
+     * Records that an engagement file was just created from a template version.
+     * Saves an index row with that applied version and no dismissal, then
+     * recalculates pending state. If the file was created on the newest
+     * published version, nothing is pending. If a newer version is already in
+     * the catalog, a pending update is opened immediately.
+     */
     public void onEngagementCreated(CreatedEngagement event) {
         EngagementTemplateRecord record = new EngagementTemplateRecord(
                 event.engagementId(),
@@ -74,6 +87,17 @@ public final class PendingUpdateService {
         syncPending(record);
     }
 
+    /**
+     * Records a newly published template version and refreshes every engagement
+     * that is still on an older version of that template.
+     *
+     * <p>Engagements that share the same applied version are grouped together so
+     * the diff and the summary are built once per group, not once per file.
+     * An engagement that already declined through this version is left alone.
+     * Everyone else gets a single pending row covering the whole jump from the
+     * version they have applied to the version just published, including a
+     * per-hop changelog of the versions in between.
+     */
     public void onTemplatePublished(TemplatePublished event) {
         catalog.recordPublish(event.templateId(), event.version());
         List<EngagementTemplateRecord> affected =
@@ -108,6 +132,20 @@ public final class PendingUpdateService {
         }
     }
 
+    /**
+     * Records the user's choice for one engagement and then recalculates what
+     * is still pending.
+     *
+     * <p>Apply moves the applied version forward to the chosen version and
+     * clears any earlier dismissal. Choosing a version older than the one
+     * already applied is rejected. Decline leaves the applied version where it
+     * is and marks every version up through the chosen one as dismissed, so
+     * those versions stop showing as pending.
+     *
+     * <p>The content of the engagement file is not changed here. If a newer
+     * version was published while the user was deciding, the follow-up sync
+     * opens a new pending row from the version they just accepted.
+     */
     public void onDecision(DecisionEvent event) {
         EngagementTemplateRecord record = registry.find(event.engagementId())
                 .orElseThrow(() -> new NotFoundException("engagement", event.engagementId().value()));
@@ -140,14 +178,29 @@ public final class PendingUpdateService {
         syncPending(updated);
     }
 
+    /**
+     * Returns every engagement in this firm that still has a template update
+     * waiting for a decision.
+     */
     public List<PendingUpdate> listPendingForFirm(FirmId firmId) {
         return pending.listByFirm(firmId);
     }
 
+    /**
+     * Returns the pending update for one engagement, or empty when that file
+     * is already on the latest version or has dismissed it.
+     */
     public Optional<PendingUpdate> getPending(EngagementId engagementId) {
         return pending.find(engagementId);
     }
 
+    /**
+     * Builds the firm-wide glance list: one row per engagement, whether or not
+     * it has something pending. Pending rows are listed first, then rows are
+     * ordered by engagement id. The headline is included only when a pending
+     * update exists. The latest version comes from that pending row, or from
+     * the catalog when the engagement is current.
+     */
     public List<AtAGlanceRow> listAtAGlance(FirmId firmId) {
         List<AtAGlanceRow> rows = new ArrayList<>();
         for (EngagementTemplateRecord record : registry.listByFirm(firmId)) {
@@ -168,6 +221,14 @@ public final class PendingUpdateService {
         return rows;
     }
 
+    /**
+     * Makes the pending store match the index row. Removes the pending update
+     * when there is no newer published version, or when the user has already
+     * dismissed through that latest version. Otherwise stores a fresh pending
+     * row from the applied version to the catalog's latest, with summaries
+     * rebuilt from the template documents. Release notes are not available on
+     * this path; only a publish event supplies them.
+     */
     private void syncPending(EngagementTemplateRecord record) {
         Optional<Integer> latest = catalog.latestVersion(record.templateId());
         if (latest.isEmpty() || latest.get() <= record.appliedVersion() || record.isDismissedThrough(latest.get())) {
@@ -186,6 +247,13 @@ public final class PendingUpdateService {
         ));
     }
 
+    /**
+     * Builds both layers of the changelog for a version span. The accumulated
+     * summary compares the start version directly with the end version, and
+     * uses the publish release notes as its headline when those notes were
+     * supplied. The hop list is one summary per adjacent step along the
+     * published versions in between, always without release notes.
+     */
     private Summaries buildSummaries(TemplateId templateId, int fromVersion, int toVersion, String releaseNotes) {
         ChangeSummary accumulated = summaryFor(templateId, fromVersion, toVersion, releaseNotes);
         List<Integer> chain = versionChain(templateId, fromVersion, toVersion);
@@ -196,6 +264,11 @@ public final class PendingUpdateService {
         return new Summaries(accumulated, hops);
     }
 
+    /**
+     * Lists the published versions from the applied version through the target,
+     * in ascending order. If either endpoint is missing from the catalog it is
+     * inserted, so the hop list still connects the two ends.
+     */
     private List<Integer> versionChain(TemplateId templateId, int fromVersion, int toVersion) {
         List<Integer> chain = new ArrayList<>();
         for (int version : catalog.versions(templateId)) {
@@ -212,6 +285,15 @@ public final class PendingUpdateService {
         return chain;
     }
 
+    /**
+     * Returns the human-readable summary for one version pair. When this call
+     * has no release notes and the pair is already cached, the cached summary
+     * is returned and the template documents are not diffed again. Otherwise
+     * the two versions are diffed, summarized, checked so every line points at
+     * a real diff path, and stored in the cache. A call that carries release
+     * notes skips the cache read so those notes become the headline, then
+     * writes that summary back for later reuse.
+     */
     private ChangeSummary summaryFor(TemplateId templateId, int fromVersion, int toVersion, String releaseNotes) {
         if (releaseNotes == null || releaseNotes.isBlank()) {
             Optional<ChangeSummary> cached = cache.get(templateId, fromVersion, toVersion);
@@ -226,5 +308,9 @@ public final class PendingUpdateService {
         return summary;
     }
 
+    /**
+     * Holds the two summary layers produced for one version span: the single
+     * accumulated summary, and the ordered list of adjacent hop summaries.
+     */
     private record Summaries(ChangeSummary accumulated, List<ChangeSummary> hops) {}
 }

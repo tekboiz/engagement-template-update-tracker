@@ -18,11 +18,20 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+/**
+ * Checks the sentences produced from a diff: release-note headlines, wording
+ * for new procedures and nested fields, and rejection of a line whose path is
+ * not in the diff.
+ */
 class DeterministicSummarizerTest {
     private final DeterministicSummarizer summarizer = new DeterministicSummarizer();
     private final JsonDiffer differ = new JsonDiffer();
     private final TemplateId template = new TemplateId("audit-ifrs");
 
+    /**
+     * When the caller supplies release notes, those notes are the headline and
+     * the summary is marked as coming from the deterministic generator.
+     */
     @Test
     void prefersContentAuthoredReleaseNotesForHeadline() {
         JsonDiff diff = differ.diff(template, 1, 2, Templates.v1(), Templates.v2());
@@ -31,6 +40,10 @@ class DeterministicSummarizerTest {
         assertEquals("deterministic", summary.generator());
     }
 
+    /**
+     * A new procedure is described as an addition in the Procedures category,
+     * names the procedure title, and cites the path of the added object.
+     */
     @Test
     void describesAddedEntitiesInPractitionerLanguage() {
         JsonDiff diff = differ.diff(template, 1, 2, Templates.v1(), Templates.v2());
@@ -42,6 +55,10 @@ class DeterministicSummarizerTest {
                         && item.sourcePath().equals("/procedures/P-210")));
     }
 
+    /**
+     * New guidance on an existing procedure is worded as an update of P-100.
+     * A new disclosure object in the same diff is still worded as an addition.
+     */
     @Test
     void describesNestedFieldAddsAsUpdatesOnTheExistingItem() {
         JsonDiff diff = differ.diff(template, 2, 3, Templates.v2(), Templates.v3());
@@ -56,6 +73,10 @@ class DeterministicSummarizerTest {
                         && item.description().contains("Related-party transactions")));
     }
 
+    /**
+     * A summary line whose path does not appear in the diff is rejected, even
+     * if the surrounding summary looks well formed.
+     */
     @Test
     void rejectHallucinatedSummaryPaths() {
         JsonDiff diff = differ.diff(template, 1, 2, Templates.v1(), Templates.v2());
@@ -70,6 +91,10 @@ class DeterministicSummarizerTest {
         assertThrows(UngroundedSummaryException.class, () -> DeterministicSummarizer.assertGrounded(diff, forged));
     }
 
+    /**
+     * A summary built directly from a one-operation diff passes the grounding
+     * check and keeps exactly that one line.
+     */
     @Test
     void groundedItemsPass() {
         JsonDiff diff = new JsonDiff(template, 1, 2, List.of(

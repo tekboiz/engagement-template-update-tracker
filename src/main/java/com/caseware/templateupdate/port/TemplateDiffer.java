@@ -8,5 +8,10 @@ import com.caseware.templateupdate.model.TemplateId;
  * template versions retrieved by (templateId, version).
  */
 public interface TemplateDiffer {
+    /**
+     * Loads the two stored template documents and returns the operations that
+     * turn {@code fromVersion} into {@code toVersion}. Callers identify versions
+     * by id; they do not pass the JSON themselves.
+     */
     JsonDiff diff(TemplateId templateId, int fromVersion, int toVersion);
 }
